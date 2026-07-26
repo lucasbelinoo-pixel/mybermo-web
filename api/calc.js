@@ -12,6 +12,14 @@ import {
   computeReducAr,
   computeReducAgua,
   computeReducSuper,
+  computePurg,
+  computePSV,
+  computeTanque,
+  computeBicoInj,
+  computeSensorTemp,
+  computeVeloc,
+  computeCondens,
+  computeResTubo,
 } from '../lib/engine.js';
 
 const HANDLERS = {
@@ -19,6 +27,14 @@ const HANDLERS = {
   reducAr: computeReducAr,
   reducAgua: computeReducAgua,
   reducSuper: computeReducSuper,
+  purg: computePurg,
+  psv: computePSV,
+  tanque: computeTanque,
+  bicoinj: computeBicoInj,
+  sensortemp: computeSensorTemp,
+  veloc: computeVeloc,
+  condens: computeCondens,
+  restub: computeResTubo,
 };
 
 export default async function handler(req, res) {
