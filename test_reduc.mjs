@@ -10,6 +10,7 @@ import {
   computePerdaTub, computeEfluente, computeCustoVap, computeTubVapor,
   computeTubAgua, computeFlash, computeDessuper,
   computeSteamProps, computeUnitConv, computeMatCurve,
+  VALV,
 } from './lib/engine.js';
 
 function dump(name, obj) {
@@ -252,5 +253,23 @@ console.assert(matcurve.invalid === false, 'matcurve: não deveria ser inválido
 console.assert(matcurve.pts.length === 61, 'matcurve: deveria ter 61 pontos (N=60, i=0..60)');
 console.assert(matcurve.pts[0][0] >= 5 && matcurve.pts[matcurve.pts.length - 1][0] <= 50, 'matcurve: pontos deveriam estar dentro do range pmin-pmax');
 console.assert(matcurve.pts.every((p, i) => i === 0 || p[1] >= matcurve.pts[i - 1][1]), 'matcurve: temperatura de saturação deveria crescer monotonicamente com a pressão');
+
+// 23) Catálogo VALV como parâmetro (2º arg, {valv}) — prova de que o servidor
+//     consegue calcular com um catálogo vindo do Supabase/admin em vez do
+//     default embutido no módulo, SEM afetar quem chama sem catálogo (default).
+const reducBaseline = computeReduc({ pin: 12, pout: 8, flow: 2000, sch: '40', x: 100 });
+const rowBase = reducBaseline.models.find(m => m.modelo === '12440').rows.find(r => r.sz === '1');
+console.assert(rowBase.cvv === 11.8, `valv custom: baseline 12440/1 Cv deveria ser 11.8 (VALV default), obtido ${rowBase.cvv}`);
+
+const customValv = JSON.parse(JSON.stringify(VALV));
+customValv['12440'].sizes['1'] = 999; // edição "de admin" simulada
+const reducCustom = computeReduc({ pin: 12, pout: 8, flow: 2000, sch: '40', x: 100 }, { valv: customValv });
+const rowCustom = reducCustom.models.find(m => m.modelo === '12440').rows.find(r => r.sz === '1');
+dump('reduc com catálogo VALV customizado (12440/1: Cv 11.8 -> 999)', { baseline_cvv: rowBase.cvv, baseline_rcv: rowBase.rcv, custom_cvv: rowCustom.cvv, custom_rcv: rowCustom.rcv });
+console.assert(rowCustom.cvv === 999, `valv custom: 12440/1 Cv deveria refletir o catálogo customizado (999), obtido ${rowCustom.cvv}`);
+console.assert(rowCustom.rcv !== rowBase.rcv, 'valv custom: rcv (CVp/cvv) deveria mudar quando o catálogo muda o Cv da bitola');
+console.assert(reducCustom.CVp === reducBaseline.CVp, 'valv custom: CVp (Cv requerido, não depende do catálogo) deveria continuar igual');
+// e o objeto VALV default do módulo (usado pelos testes acima, sem 2º argumento) não foi mutado:
+console.assert(VALV['12440'].sizes['1'] === 11.8, 'valv custom: o VALV default do módulo não deveria ter sido alterado pelo teste (isolamento via clone)');
 
 console.log('\nTodos os testes (asserts) passaram sem lançar exceção.');

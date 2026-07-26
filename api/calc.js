@@ -7,6 +7,14 @@
 //
 // Autenticação: por enquanto o site inteiro já está atrás de Basic Auth
 // (middleware.js / SITE_PASS). Autenticação por usuário fica para depois.
+//
+// Catálogo VALV (válvulas): para os módulos que selecionam válvula (reduc,
+// reducAr, reducAgua, reducSuper), o VALV é carregado do Supabase (tabela
+// `catalogos`, editável pelo admin) via lib/catalogs.js, com cache de ~60s e
+// fallback automático para o VALV hardcoded de lib/engine.js se a env
+// SUPABASE_SERVICE_ROLE_KEY não estiver configurada ou a leitura falhar.
+// PSV usa catálogos próprios (BRZ_MODELS/calcValv), não VALV — fica de fora
+// desta etapa.
 import {
   computeReduc,
   computeReducAr,
@@ -30,7 +38,9 @@ import {
   computeSteamProps,
   computeUnitConv,
   computeMatCurve,
+  VALV,
 } from '../lib/engine.js';
+import { loadValv } from '../lib/catalogs.js';
 
 const HANDLERS = {
   reduc: computeReduc,
@@ -57,6 +67,10 @@ const HANDLERS = {
   matcurve: computeMatCurve,
 };
 
+// módulos cujo cálculo depende do catálogo VALV (recebem {valv} como 2º
+// argumento); os demais continuam chamados com um único argumento, como antes.
+const VALV_MODULES = new Set(['reduc', 'reducAr', 'reducAgua', 'reducSuper']);
+
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
     res.status(405).json({ error: 'Method not allowed' });
@@ -73,7 +87,13 @@ export default async function handler(req, res) {
       return;
     }
 
-    const result = fn(inputs || {});
+    let result;
+    if (VALV_MODULES.has(mod)) {
+      const valv = await loadValv(VALV);
+      result = fn(inputs || {}, { valv });
+    } else {
+      result = fn(inputs || {});
+    }
     res.status(200).json(result);
   } catch (err) {
     res.status(400).json({ error: err && err.message ? err.message : String(err) });
