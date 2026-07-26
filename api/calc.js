@@ -27,6 +27,9 @@ import {
   computeTubAgua,
   computeFlash,
   computeDessuper,
+  computeSteamProps,
+  computeUnitConv,
+  computeMatCurve,
 } from '../lib/engine.js';
 
 const HANDLERS = {
@@ -49,6 +52,9 @@ const HANDLERS = {
   tubagua: computeTubAgua,
   flash: computeFlash,
   dessuper: computeDessuper,
+  steamprops: computeSteamProps,
+  unitconv: computeUnitConv,
+  matcurve: computeMatCurve,
 };
 
 export default async function handler(req, res) {

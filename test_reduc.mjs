@@ -9,6 +9,7 @@ import {
   computeVeloc, computeCondens, computeResTubo,
   computePerdaTub, computeEfluente, computeCustoVap, computeTubVapor,
   computeTubAgua, computeFlash, computeDessuper,
+  computeSteamProps, computeUnitConv, computeMatCurve,
 } from './lib/engine.js';
 
 function dump(name, obj) {
@@ -213,5 +214,43 @@ console.assert(dessuper.invalid === false && dessuper.empty === false, 'dessuper
 console.assert(dessuper.S.mtot > 0 && dessuper.S.qrec > 0, 'dessuper: vazão de NH3 e calor recuperável deveriam ser > 0');
 console.assert(dessuper.S.w2 <= dessuper.S.w1, 'dessuper: consumo elétrico com dessuper não deveria ser maior que o atual (Tcond2<=Tcond1)');
 console.assert(dessuper.volNH3 != null && dessuper.volNH3 > 0, 'dessuper: vazão volumétrica de NH3 deveria ser calculada');
+
+// ===================== LOTE "VISUALIZADORES" =====================
+
+// 20) Propriedades do vapor saturado — modo P: 8 bar(g) -> Tsat, lat, vv
+const steampropsP = computeSteamProps({ mode: 'P', pv: 8, pUnit: 'bar (g)', tUnit: '°C', latUnit: 'kcal/kg', vvUnit: 'm³/kg' });
+dump('steamprops (modo pressão, 8 barg)', steampropsP);
+console.assert(steampropsP.invalid === false, 'steamprops(P): não deveria ser inválido');
+console.assert(Math.abs(steampropsP.T - 175.44) < 0.05, `steamprops(P): Tsat(8barg) deveria ser ~175.44°C, obtido ${steampropsP.T}`);
+
+// 20b) modo T: 170°C -> Psat, lat, vv (round-trip aproximado com o caso acima)
+const steampropsT = computeSteamProps({ mode: 'T', tv: 170, tvUnit: '°C', poutUnit: 'bar (g)', latUnit: 'kcal/kg', vvUnit: 'm³/kg' });
+dump('steamprops (modo temperatura, 170°C)', steampropsT);
+console.assert(steampropsT.invalid === false, 'steamprops(T): não deveria ser inválido');
+console.assert(steampropsT.P > 6 && steampropsT.P < 8, `steamprops(T): P(170°C) deveria estar entre 6 e 8 barg, obtido ${steampropsT.P}`);
+
+// 21) Conversor de unidades — pressão bar->psi, temperatura °C->°F, viscosidade cP->cSt
+const unitconvPress = computeUnitConv({ category: 'Pressão', value: 1, fromUnit: 'bar', toUnit: 'psi' });
+dump('unitconv (1 bar -> psi)', unitconvPress);
+console.assert(unitconvPress.invalid === false && Math.abs(unitconvPress.value - 14.5038) < 1e-3, 'unitconv: 1 bar deveria ser ~14.5038 psi');
+
+const unitconvTemp = computeUnitConv({ category: 'Temperatura', value: 100, fromUnit: '°C', toUnit: '°F' });
+console.assert(unitconvTemp.invalid === false && unitconvTemp.value === 212, 'unitconv: 100°C deveria ser 212°F');
+
+const unitconvViscNoRho = computeUnitConv({ category: 'Viscosidade', value: 100, fromUnit: 'cP', toUnit: 'cSt' });
+console.assert(unitconvViscNoRho.invalid === false && unitconvViscNoRho.value === null, 'unitconv: cP->cSt sem densidade deveria retornar value=null (mesmo comportamento do ucConvert original)');
+
+const unitconvVisc = computeUnitConv({ category: 'Viscosidade', value: 100, fromUnit: 'cP', toUnit: 'cSt', rho: 1000 });
+dump('unitconv (100 cP -> cSt, rho=1000)', unitconvVisc);
+console.assert(unitconvVisc.invalid === false && Math.abs(unitconvVisc.value - 100) < 1e-6, 'unitconv: 100 cP a rho=1000 deveria dar ~100 cSt (numericamente, pela relação de conversão de base)');
+
+// 22) Curva P×T por material — apenas a curva auxiliar de saturação do vapor (núcleo
+//     migrado); a base de materiais/ratings (editável via admin) fica no cliente.
+const matcurve = computeMatCurve({ pmin: 5, pmax: 50 });
+dump('matcurve (curva de saturação do vapor, 5-50 bar)', { invalid: matcurve.invalid, vapMax: matcurve.vapMax, nPts: matcurve.pts.length, first: matcurve.pts[0], last: matcurve.pts[matcurve.pts.length - 1] });
+console.assert(matcurve.invalid === false, 'matcurve: não deveria ser inválido');
+console.assert(matcurve.pts.length === 61, 'matcurve: deveria ter 61 pontos (N=60, i=0..60)');
+console.assert(matcurve.pts[0][0] >= 5 && matcurve.pts[matcurve.pts.length - 1][0] <= 50, 'matcurve: pontos deveriam estar dentro do range pmin-pmax');
+console.assert(matcurve.pts.every((p, i) => i === 0 || p[1] >= matcurve.pts[i - 1][1]), 'matcurve: temperatura de saturação deveria crescer monotonicamente com a pressão');
 
 console.log('\nTodos os testes (asserts) passaram sem lançar exceção.');
