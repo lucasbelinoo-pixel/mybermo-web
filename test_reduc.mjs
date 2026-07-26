@@ -7,6 +7,8 @@ import {
   computeReduc, computeReducAr, computeReducAgua, computeReducSuper,
   computePurg, computePSV, computeTanque, computeBicoInj, computeSensorTemp,
   computeVeloc, computeCondens, computeResTubo,
+  computePerdaTub, computeEfluente, computeCustoVap, computeTubVapor,
+  computeTubAgua, computeFlash, computeDessuper,
 } from './lib/engine.js';
 
 function dump(name, obj) {
@@ -126,5 +128,90 @@ dump('restub (resistência em tubo)', restub);
 console.assert(restub.epress != null && restub.emin != null, 'restub: epress/emin deveriam estar definidos');
 console.assert(restub.mawp != null && restub.mawp > 0, 'restub: mawp deveria ser finito e > 0');
 console.assert(typeof restub.ok === 'boolean', 'restub: ok deveria ser boolean (enom informado)');
+
+// ===================== LOTE FINAL (módulos compostos) =====================
+
+// 13) Perda de energia em tubulações: DN2" Sch40 (od2=60.3, esp=3.91), L=50m,
+//     emiss=0.8, Top=180°C, Tamb=25°C, vento=1m/s, isolamento 50mm de silicato de cálcio
+const perdatub = computePerdaTub({
+  od2: 60.3, esp: 3.91, L: 50, emiss: 0.8, Top: 180, Tamb: 25, wind: 1,
+  espi: 50, semmi: 0.9,
+  isolKc: [3.15711450669498e-13, -7.46414098804696e-10, 7.36554703131284e-07, -2.24880830111714e-04, 7.33360403664444e-02],
+  pci: 8600, rhof: 1, preco: 2.5, hd: 24, dm: 30, inv: 1000,
+});
+dump('perdatub (perda de energia em tubulações)', perdatub);
+console.assert(perdatub.invalid === false, 'perdatub: não deveria ser inválido');
+console.assert(perdatub.hasIsol === true && perdatub.isol.loss < perdatub.bare.loss, 'perdatub: isolamento deveria reduzir a perda de calor');
+console.assert(perdatub.econMes != null && perdatub.econMes > 0, 'perdatub: economia mensal deveria ser calculada (pci/rhof/preco informados)');
+
+// 14) Efluente líquido: 5000 kg/h de 80->40°C (cp=4.186 kJ/kg·K), secundário 3000 kg/h a 20°C
+const efluente = computeEfluente({
+  meff: 5000, cpeffK: 4.186, tin: 80, tout: 40, msec: 3000, cpsecK: 4.186, tinsec: 20,
+  PCI: 8600, rho: 1, custo: 2.5, co2: 2, hd: 24, dm: 30, inv: 5000,
+});
+dump('efluente (estudo de efluente líquido)', efluente);
+console.assert(efluente.invalid === false, 'efluente: não deveria ser inválido');
+console.assert(Math.abs(efluente.Q_kJ - 5000 * 4.186 * 40) < 1e-6, 'efluente: Q_kJ deveria bater com m·cp·ΔT');
+console.assert(efluente.toutsec != null && efluente.toutsec > 20, 'efluente: toutsec deveria ser calculado (secundário informado)');
+
+// 15) Custo do vapor: mv=5000 kg/h, P=10 barg, efic=85%, perdas=2%, repos=10%, PCI=8600
+const custovap = computeCustoVap({
+  mv: 5000, P: 10, eficPct: 85, perdasPct: 2, reposIn: 10, reposUn: 'pct',
+  Tret: 80, Tmu: 20, PCI: 8600, dens: 1, custoAgua: 5, custoCombIn: 2.5, custoUn: 'm3', hd: 24, dm: 30,
+});
+dump('custovap (custo do vapor / caldeira)', custovap);
+console.assert(custovap.invalid === false, 'custovap: não deveria ser inválido');
+console.assert(custovap.delta > 0, 'custovap: salto entálpico (delta) deveria ser positivo');
+console.assert(custovap.custoTonOK === true && custovap.custoMes > 0, 'custovap: custo mensal deveria ser calculado');
+
+// 16) Tubulação de vapor: 10 barg, x=100%, flow=5000 kg/h, 1 trecho de tubo + 1 conexão
+const tubvapor = computeTubVapor({
+  press: 10, x: 100, flow: 5000,
+  items: [
+    { id: 1, tipo: 'tubo', dn: '4', sch: '40', L: 50, eps: 0.046 },
+    { id: 2, tipo: 'conexao', dn: '4', sch: '40', K: 0.9, qtd: 2 },
+  ],
+});
+dump('tubvapor (tubulação de vapor saturado)', tubvapor);
+console.assert(tubvapor.invalid === false, 'tubvapor: não deveria ser inválido');
+console.assert(tubvapor.items.length === 2 && tubvapor.items[0].dp > 0 && tubvapor.items[1].dp > 0, 'tubvapor: ambos os itens deveriam ter ΔP > 0');
+console.assert(Math.abs(tubvapor.summary.total - (tubvapor.items[0].dp + tubvapor.items[1].dp)) < 1e-9, 'tubvapor: total deveria ser a soma dos itens');
+
+// 17) Tubulação de água: 20°C, 50 m³/h, 1 trecho de tubo na sucção + bomba habilitada
+const tubagua = computeTubAgua({
+  temp: 20, flow: 50, flowun: 'm3h',
+  items: [{ id: 1, tipo: 'tubo', dn: '3', sch: '40', L: 20, eps: 0.046, loc: 'Sucção' }],
+  hSuc: 2, hRec: 10, dnSuc: '4', schSuc: '40', dnRec: '3', schRec: '40',
+  hman: 30, rend: 70, custo: 0.7, hd: 10, dm: 26,
+});
+dump('tubagua (tubulação de água - bombas elétricas)', tubagua);
+console.assert(tubagua.invalid === false, 'tubagua: não deveria ser inválido');
+console.assert(tubagua.summary.suc > 0 && tubagua.summary.rec === 0, 'tubagua: perda deveria estar toda na sucção (único item com loc=Sucção)');
+console.assert(tubagua.pump.npshd != null && tubagua.pump.powCV != null, 'tubagua: NPSHd e potência da bomba deveriam ser calculados');
+
+// 18) Estudo de vapor flash (núcleo termodinâmico + viabilidade — migração parcial;
+//     purgador/estação complementar permanecem no cliente): vCon=5000 kg/h, 10->3 barg
+const flash = computeFlash({
+  vCon: 5000, Palim: 10, Preev: 3, Pcon: 0,
+  PCI: 8600, rho: 1, precoRaw: 2.5, precoUn: 'm3', hd: 24, dm: 30, inv: 1000, co2: 2,
+});
+dump('flash (estudo de vapor flash - núcleo)', flash);
+console.assert(flash.invalid === false, 'flash: não deveria ser inválido');
+console.assert(flash.x > 0 && flash.x < 1, 'flash: fração de flash deveria estar entre 0 e 1');
+console.assert(Math.abs(flash.vFlash + flash.vDren - flash.vCon) < 1e-6, 'flash: vFlash+vDren deveria bater com vCon');
+console.assert(flash.tank && flash.tank.modelo === 'VD13-5', 'flash: tanque selecionado deveria ser o VD13-5 (5 m³/h < 5)');
+
+// 19) Dessuperaquecimento de NH3: 1 compressor de 100 kW, Tevap=-10°C, Tcond=35->33.7°C
+const dessuper = computeDessuper({
+  comps: [{ qkw: 100, tevap: -10, tcond: 35, eta: 0.7, t2man: null }],
+  tcond2: 33.7, tds: 35, peq: 10,
+  wStale: 'tin', wMw: 5000, wTout: 30,
+  horas: 24, dias: 30, tarifa: 0.7, cvap: 100, inv: 10000, co2v: 100, co2e: 100,
+});
+dump('dessuper (dessuperaquecimento NH3)', dessuper);
+console.assert(dessuper.invalid === false && dessuper.empty === false, 'dessuper: não deveria ser inválido/vazio (1 compressor informado)');
+console.assert(dessuper.S.mtot > 0 && dessuper.S.qrec > 0, 'dessuper: vazão de NH3 e calor recuperável deveriam ser > 0');
+console.assert(dessuper.S.w2 <= dessuper.S.w1, 'dessuper: consumo elétrico com dessuper não deveria ser maior que o atual (Tcond2<=Tcond1)');
+console.assert(dessuper.volNH3 != null && dessuper.volNH3 > 0, 'dessuper: vazão volumétrica de NH3 deveria ser calculada');
 
 console.log('\nTodos os testes (asserts) passaram sem lançar exceção.');

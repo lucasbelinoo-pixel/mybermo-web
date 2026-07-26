@@ -20,6 +20,13 @@ import {
   computeVeloc,
   computeCondens,
   computeResTubo,
+  computePerdaTub,
+  computeEfluente,
+  computeCustoVap,
+  computeTubVapor,
+  computeTubAgua,
+  computeFlash,
+  computeDessuper,
 } from '../lib/engine.js';
 
 const HANDLERS = {
@@ -35,6 +42,13 @@ const HANDLERS = {
   veloc: computeVeloc,
   condens: computeCondens,
   restub: computeResTubo,
+  perdatub: computePerdaTub,
+  efluente: computeEfluente,
+  custovap: computeCustoVap,
+  tubvapor: computeTubVapor,
+  tubagua: computeTubAgua,
+  flash: computeFlash,
+  dessuper: computeDessuper,
 };
 
 export default async function handler(req, res) {
