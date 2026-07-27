@@ -10,7 +10,7 @@ import {
   computePerdaTub, computeEfluente, computeCustoVap, computeTubVapor,
   computeTubAgua, computeFlash, computeDessuper,
   computeSteamProps, computeUnitConv, computeMatCurve,
-  VALV,
+  VALV, PURG,
 } from './lib/engine.js';
 
 function dump(name, obj) {
@@ -271,5 +271,24 @@ console.assert(rowCustom.rcv !== rowBase.rcv, 'valv custom: rcv (CVp/cvv) deveri
 console.assert(reducCustom.CVp === reducBaseline.CVp, 'valv custom: CVp (Cv requerido, não depende do catálogo) deveria continuar igual');
 // e o objeto VALV default do módulo (usado pelos testes acima, sem 2º argumento) não foi mutado:
 console.assert(VALV['12440'].sizes['1'] === 11.8, 'valv custom: o VALV default do módulo não deveria ter sido alterado pelo teste (isolamento via clone)');
+
+// 24) Catálogo PURG como parâmetro (2º arg, {purg}) — mesmo padrão do VALV,
+//     replicado para purgadores (mesmo compute, catálogo trocável).
+const purgIdx = PURG.findIndex(m => m.modelo === 'PT61 - 10');
+console.assert(purgIdx >= 0, 'purg custom: modelo "PT61 - 10" deveria existir no catálogo PURG');
+const purgBaseline = computePurg({ pin: 10, pout: 4, flow: 500, fsReq: 1.5 });
+const purgRowBase = purgBaseline.models[purgIdx].bitolas[0];
+console.assert(purgRowBase.cap > 300 && purgRowBase.cap < 320, `purg custom: baseline PT61-10 (1ª bitola) cap deveria ficar ~309.6 kg/h, obtido ${purgRowBase.cap}`);
+
+const customPurg = JSON.parse(JSON.stringify(PURG));
+customPurg[purgIdx].bitolas[0].curva = '0 * x + 1'; // curva "editada pelo admin": capacidade quase nula
+const purgCustom = computePurg({ pin: 10, pout: 4, flow: 500, fsReq: 1.5 }, { purg: customPurg });
+const purgRowCustom = purgCustom.models[purgIdx].bitolas[0];
+dump('purg com catálogo PURG customizado (PT61-10, 1ª bitola: curva -> capacidade quase nula)', { baseline_cap: purgRowBase.cap, baseline_fs: purgRowBase.fs, custom_cap: purgRowCustom.cap, custom_fs: purgRowCustom.fs });
+console.assert(purgRowCustom.cap === 1, `purg custom: cap deveria refletir a curva customizada (0*x+1=1), obtido ${purgRowCustom.cap}`);
+console.assert(purgRowCustom.fs !== purgRowBase.fs, 'purg custom: fs (fator de segurança) deveria mudar quando o catálogo muda a curva de capacidade');
+console.assert(purgCustom.dp === purgBaseline.dp && purgCustom.Tcond === purgBaseline.Tcond, 'purg custom: dp/Tcond (não dependem do catálogo) deveriam continuar iguais');
+// e o PURG default do módulo (usado pelos testes acima, sem 2º argumento) não foi mutado:
+console.assert(PURG[purgIdx].bitolas[0].curva !== '0 * x + 1', 'purg custom: o PURG default do módulo não deveria ter sido alterado pelo teste (isolamento via clone)');
 
 console.log('\nTodos os testes (asserts) passaram sem lançar exceção.');

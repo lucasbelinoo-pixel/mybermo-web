@@ -8,13 +8,18 @@
 // Autenticação: por enquanto o site inteiro já está atrás de Basic Auth
 // (middleware.js / SITE_PASS). Autenticação por usuário fica para depois.
 //
-// Catálogo VALV (válvulas): para os módulos que selecionam válvula (reduc,
-// reducAr, reducAgua, reducSuper), o VALV é carregado do Supabase (tabela
-// `catalogos`, editável pelo admin) via lib/catalogs.js, com cache de ~60s e
-// fallback automático para o VALV hardcoded de lib/engine.js se a env
-// SUPABASE_SERVICE_ROLE_KEY não estiver configurada ou a leitura falhar.
-// PSV usa catálogos próprios (BRZ_MODELS/calcValv), não VALV — fica de fora
-// desta etapa.
+// Catálogos vindos do Supabase (tabela `catalogos`, editável pelo admin),
+// carregados via lib/catalogs.js (cache ~60s + fallback automático para o
+// catálogo hardcoded de lib/engine.js se a env SUPABASE_SERVICE_ROLE_KEY não
+// estiver configurada ou a leitura falhar):
+//  - VALV (válvulas): reduc, reducAr, reducAgua, reducSuper.
+//  - PURG (purgadores): purg.
+// PSV usa catálogos próprios (BRZ_MODELS/calcValv), não VALV/PURG — fica de
+// fora. MATDB (materiais, curva P×T) NÃO é usado por nenhum compute do
+// servidor — computeMatCurve só calcula a curva auxiliar de saturação do
+// vapor; a base de materiais é puro lookup no cliente — por isso NÃO há
+// carregamento de 'matdb' aqui (só existe seed + edição→upsert, no
+// index.html).
 import {
   computeReduc,
   computeReducAr,
@@ -39,8 +44,9 @@ import {
   computeUnitConv,
   computeMatCurve,
   VALV,
+  PURG,
 } from '../lib/engine.js';
-import { loadValv } from '../lib/catalogs.js';
+import { loadValv, loadCatalogo } from '../lib/catalogs.js';
 
 const HANDLERS = {
   reduc: computeReduc,
@@ -71,6 +77,10 @@ const HANDLERS = {
 // argumento); os demais continuam chamados com um único argumento, como antes.
 const VALV_MODULES = new Set(['reduc', 'reducAr', 'reducAgua', 'reducSuper']);
 
+// módulos cujo cálculo depende do catálogo PURG (recebem {purg} como 2º
+// argumento). Mesmo padrão do VALV, catálogo separado.
+const PURG_MODULES = new Set(['purg']);
+
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
     res.status(405).json({ error: 'Method not allowed' });
@@ -91,6 +101,9 @@ export default async function handler(req, res) {
     if (VALV_MODULES.has(mod)) {
       const valv = await loadValv(VALV);
       result = fn(inputs || {}, { valv });
+    } else if (PURG_MODULES.has(mod)) {
+      const purg = await loadCatalogo('purg', PURG);
+      result = fn(inputs || {}, { purg });
     } else {
       result = fn(inputs || {});
     }
