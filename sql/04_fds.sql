@@ -38,3 +38,24 @@ create policy "usuario atualiza proprias fds" on public.fds
 drop policy if exists "usuario apaga proprias fds" on public.fds;
 create policy "usuario apaga proprias fds" on public.fds
   for delete using ( auth.uid() = user_id );
+
+-- Leitura admin (bug reportado: painel "Registro de FDs" só mostrava as FDs
+-- do próprio admin, porque o painel lia o espelho local mybermo_fdlog, que
+-- com a RLS acima só contém as FDs do usuário logado). Policies são
+-- permissivas/OR entre si: com esta, o admin lê TODAS as FDs (a policy
+-- "usuario le proprias fds" continua valendo para os demais usuários);
+-- escrita (insert/update/delete) continua só auth.uid()=user_id — sem
+-- policy admin para essas, ver nota abaixo. public.is_admin() já existe
+-- (ver 01_setup.sql), mesmo padrão usado em "profiles".
+drop policy if exists "fds leitura admin" on public.fds;
+create policy "fds leitura admin" on public.fds
+  for select using ( public.is_admin() );
+
+-- NÃO aplicada nesta rodada (index.html: o botão "Excluir" por linha do
+-- painel admin só aparece para FDs do PRÓPRIO admin, justamente porque não
+-- existe policy de delete admin-para-outros ainda). Se o usuário quiser que
+-- o admin possa excluir FDs de QUALQUER usuário pelo painel, esta é a policy
+-- simétrica à de leitura acima — descomentar/rodar deliberadamente:
+-- drop policy if exists "fds exclusao admin" on public.fds;
+-- create policy "fds exclusao admin" on public.fds
+--   for delete using ( public.is_admin() );
