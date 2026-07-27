@@ -5,8 +5,10 @@
 // de funções do plano gratuito da Vercel — cada módulo é escolhido via
 // `{ module, inputs }` no corpo da requisição.
 //
-// Autenticação: por enquanto o site inteiro já está atrás de Basic Auth
-// (middleware.js / SITE_PASS). Autenticação por usuário fica para depois.
+// Autenticação: exige sessão Supabase válida (Authorization: Bearer
+// <access_token>, ver lib/auth.js#requireUser) — substitui a antiga
+// dependência exclusiva da porta Basic Auth de site inteiro (middleware.js/
+// SITE_PASS), que pode ser removida da Vercel depois de validado em produção.
 //
 // Catálogos vindos do Supabase (tabela `catalogos`, editável pelo admin),
 // carregados via lib/catalogs.js (cache ~60s + fallback automático para o
@@ -52,6 +54,7 @@ import {
   PURG,
 } from '../lib/engine.js';
 import { loadValv, loadCatalogo } from '../lib/catalogs.js';
+import { requireUser, AuthError } from '../lib/auth.js';
 
 const HANDLERS = {
   reduc: computeReduc,
@@ -91,6 +94,14 @@ const PURG_MODULES = new Set(['purg', 'purgcurve']);
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
     res.status(405).json({ error: 'Method not allowed' });
+    return;
+  }
+
+  try {
+    await requireUser(req);
+  } catch (err) {
+    const status = err instanceof AuthError ? err.status : 401;
+    res.status(status).json({ error: (err && err.message) || 'não autenticado' });
     return;
   }
 

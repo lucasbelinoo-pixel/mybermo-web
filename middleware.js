@@ -3,8 +3,17 @@ import { next } from '@vercel/functions';
 // Porta de proteção durante a migração: exige uma senha única (Basic Auth)
 // antes de servir QUALQUER coisa do site (inclusive o HTML com as fórmulas).
 // Configurada pela variável de ambiente SITE_PASS na Vercel.
-// Quando os cálculos estiverem no servidor, basta remover SITE_PASS para liberar
-// e passar a depender só do login do Supabase.
+//
+// PASSO FINAL da migração: TODOS os endpoints /api/* agora se autenticam
+// sozinhos por usuário (Authorization: Bearer <access_token do Supabase>,
+// ver lib/auth.js#requireUser, usado por api/calc.js, api/blocos.js e
+// api/users.js). Por isso o bypass abaixo vale para /api/* inteiro (antes só
+// valia para /api/users): isto evita o conflito Basic×Bearer (o mesmo
+// cabeçalho Authorization não pode carregar as duas credenciais ao mesmo
+// tempo) enquanto SITE_PASS ainda existir, SEM depender de um novo deploy
+// para o usuário poder remover SITE_PASS na Vercel quando quiser — a partir
+// daí o site abre direto na tela de login do app, e cada /api/* já exige
+// sessão válida por conta própria.
 
 export const config = {
   matcher: '/((?!favicon.ico).*)',
@@ -17,13 +26,14 @@ export default function middleware(request) {
   const USER = process.env.SITE_USER || 'bermo';
   const auth = request.headers.get('authorization') || '';
 
-  // /api/users usa o MESMO cabeçalho Authorization para o token do Supabase
-  // (Bearer), o que sobrescreve a credencial Basic da porta e fazia o navegador
-  // pedir senha de novo. Deixa passar: o endpoint valida o token e exige admin
-  // por conta própria (autenticação mais forte que a porta).
+  // /api/* usa o MESMO cabeçalho Authorization para o token do Supabase
+  // (Bearer), o que sobrescreve a credencial Basic da porta e fazia o
+  // navegador pedir senha de novo. Deixa passar: cada endpoint valida o
+  // token por conta própria (requireUser, lib/auth.js) — autenticação mais
+  // forte, por usuário, no lugar da senha única do site inteiro.
   try {
     const path = new URL(request.url).pathname;
-    if (path === '/api/users' && auth.startsWith('Bearer ')) return next();
+    if (path.startsWith('/api/') && auth.startsWith('Bearer ')) return next();
   } catch (e) {}
 
   if (auth.startsWith('Basic ')) {

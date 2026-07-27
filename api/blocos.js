@@ -3,17 +3,27 @@
 // blocos "coloridos" (fábrica) usados na ferramenta de desenho / biblioteca
 // de blocos. Antes esses catálogos (~3.4MB de base64) viviam como literais
 // gigantes dentro do index.html; foram movidos para lib/blocks.js e passam a
-// ser buscados em runtime via fetch('/api/blocos') (ver mbLoadBlocks() no
-// index.html).
+// ser buscados em runtime via mbApiFetch('/api/blocos') (ver mbLoadBlocks()
+// no index.html — disparado só após login, nunca mais no boot da página).
 //
-// Autenticação: por enquanto o site inteiro já está atrás de Basic Auth
-// (middleware.js / SITE_PASS), o que já protege este endpoint. Autenticação
-// por usuário/JWT fica para depois.
+// Autenticação: exige sessão Supabase válida (Authorization: Bearer
+// <access_token>, ver lib/auth.js#requireUser) — substitui a antiga
+// dependência exclusiva da porta Basic Auth de site inteiro (middleware.js/
+// SITE_PASS), que pode ser removida da Vercel depois de validado em produção.
 import { BERMO_COLOR, BERMO_COLOR_PARTS } from '../lib/blocks.js';
+import { requireUser, AuthError } from '../lib/auth.js';
 
 export default async function handler(req, res) {
   if (req.method !== 'GET') {
     res.status(405).json({ error: 'Method not allowed' });
+    return;
+  }
+
+  try {
+    await requireUser(req);
+  } catch (err) {
+    const status = err instanceof AuthError ? err.status : 401;
+    res.status(status).json({ error: (err && err.message) || 'não autenticado' });
     return;
   }
 

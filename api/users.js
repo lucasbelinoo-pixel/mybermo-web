@@ -11,46 +11,24 @@
 // quem chamou é admin (profiles.is_admin, lido com service_role) e só então
 // executa a ação pedida com a service_role.
 //
-// Autenticação em duas camadas: (1) Basic Auth de site inteiro já existente
-// (middleware.js/SITE_PASS) protege o endpoint de acesso anônimo externo;
-// (2) aqui, por-usuário: token Supabase do chamador + checagem is_admin.
+// Autenticação em duas camadas: (1) por-usuário, via lib/auth.js#requireUser
+// (token Supabase do chamador) + checagem is_admin (lib/auth.js#isAdmin) —
+// esta é a autenticação REAL do endpoint; (2) Basic Auth de site inteiro
+// (middleware.js/SITE_PASS), enquanto ainda existir, é só uma camada extra
+// que o usuário pode remover a qualquer momento sem quebrar isto aqui
+// (middleware.js já deixa passar Bearer em qualquer /api/*).
 //
 // Tabela `profiles` (sql/01_setup.sql): id (=auth.users.id), nome, empresa,
 // is_admin, modules (jsonb — array de ids de módulo BLOQUEADOS para aquele
 // usuário; mesmo formato que o cliente usa em CURRENT_USER.block/modAllowed
 // — ver index.html). Linhas antigas podem ter modules:{} (default da coluna);
 // tratamos qualquer valor que não seja array como "nenhum módulo bloqueado".
-const SUPABASE_URL = 'https://rzvuokutcuybzwlkmefn.supabase.co'; // mesmo valor de lib/catalogs.js
+import { requireUser, isAdmin, AuthError } from '../lib/auth.js';
+
+const SUPABASE_URL = 'https://rzvuokutcuybzwlkmefn.supabase.co'; // mesmo valor de lib/catalogs.js e lib/auth.js
 
 function normModules(m) {
   return Array.isArray(m) ? m : [];
-}
-
-// GET /auth/v1/user — identifica o dono do access_token (não precisa ser
-// admin; só confirma que o token é válido e devolve {id,email}).
-async function getCallerFromToken(token, serviceKey) {
-  const res = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
-    headers: {
-      apikey: serviceKey,
-      Authorization: `Bearer ${token}`,
-    },
-  });
-  if (!res.ok) return null;
-  const data = await res.json().catch(() => null);
-  if (!data || !data.id) return null;
-  return { id: data.id, email: data.email || '' };
-}
-
-// Confere profiles.is_admin do chamador (lido com service_role — não passa
-// pela RLS, mas a checagem "é admin?" É a própria substituta da RLS aqui).
-async function callerIsAdmin(callerId, serviceKey) {
-  const url = `${SUPABASE_URL}/rest/v1/profiles?id=eq.${encodeURIComponent(callerId)}&select=is_admin`;
-  const res = await fetch(url, {
-    headers: { apikey: serviceKey, Authorization: `Bearer ${serviceKey}` },
-  });
-  if (!res.ok) return false;
-  const rows = await res.json().catch(() => []);
-  return Array.isArray(rows) && rows[0] && rows[0].is_admin === true;
 }
 
 async function authAdminFetch(path, serviceKey, opts = {}) {
@@ -102,11 +80,11 @@ export default async function handler(req, res) {
     return;
   }
 
+  // Gestão de usuários exige a service_role key (única forma de criar/
+  // excluir usuários e redefinir senha) — requireUser() abaixo já checa isso
+  // e lança 500 com mensagem clara se a env não estiver configurada, então
+  // não duplicamos a checagem aqui.
   const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if (!serviceKey) {
-    res.status(500).json({ error: 'Gestão de usuários indisponível: SUPABASE_SERVICE_ROLE_KEY não configurada no servidor.' });
-    return;
-  }
 
   let body;
   try {
@@ -117,35 +95,24 @@ export default async function handler(req, res) {
   }
   const { action } = body;
 
-  // ---- autenticação do chamador (camada 2: por-usuário) ----
-  const authHeader = req.headers && (req.headers.authorization || req.headers.Authorization) || '';
-  const m = /^Bearer\s+(.+)$/i.exec(String(authHeader).trim());
-  if (!m) {
-    res.status(401).json({ error: 'Requisição sem token (Authorization: Bearer <access_token>).' });
-    return;
-  }
-  const token = m[1];
-
+  // ---- autenticação do chamador (camada 1: por-usuário; ver lib/auth.js) ----
   let caller;
   try {
-    caller = await getCallerFromToken(token, serviceKey);
-  } catch (e) {
-    res.status(401).json({ error: 'Falha ao validar sessão.' });
-    return;
-  }
-  if (!caller) {
-    res.status(401).json({ error: 'Sessão inválida ou expirada. Faça login novamente.' });
+    ({ user: caller } = await requireUser(req));
+  } catch (err) {
+    const status = err instanceof AuthError ? err.status : 401;
+    res.status(status).json({ error: (err && err.message) || 'não autenticado' });
     return;
   }
 
-  let isAdmin;
+  let admin;
   try {
-    isAdmin = await callerIsAdmin(caller.id, serviceKey);
+    admin = await isAdmin(caller.id);
   } catch (e) {
     res.status(500).json({ error: 'Falha ao verificar permissões de administrador.' });
     return;
   }
-  if (!isAdmin) {
+  if (!admin) {
     res.status(403).json({ error: 'Acesso restrito ao administrador.' });
     return;
   }
