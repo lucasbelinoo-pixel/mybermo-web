@@ -12,7 +12,9 @@
 // carregados via lib/catalogs.js (cache ~60s + fallback automático para o
 // catálogo hardcoded de lib/engine.js se a env SUPABASE_SERVICE_ROLE_KEY não
 // estiver configurada ou a leitura falhar):
-//  - VALV (válvulas): reduc, reducAr, reducAgua, reducSuper.
+//  - VALV (válvulas): reduc, reducAr, reducAgua, reducSuper, flashcomp (estação
+//    complementar do estudo de vapor flash — mesma válvula redutora, modelo já
+//    escolhido pelo cliente).
 //  - PURG (purgadores): purg.
 // PSV usa catálogos próprios (BRZ_MODELS/calcValv), não VALV/PURG — fica de
 // fora. MATDB (materiais, curva P×T) NÃO é usado por nenhum compute do
@@ -39,6 +41,7 @@ import {
   computeTubVapor,
   computeTubAgua,
   computeFlash,
+  computeFlashComp,
   computeDessuper,
   computeSteamProps,
   computeUnitConv,
@@ -67,6 +70,7 @@ const HANDLERS = {
   tubvapor: computeTubVapor,
   tubagua: computeTubAgua,
   flash: computeFlash,
+  flashcomp: computeFlashComp,
   dessuper: computeDessuper,
   steamprops: computeSteamProps,
   unitconv: computeUnitConv,
@@ -75,7 +79,7 @@ const HANDLERS = {
 
 // módulos cujo cálculo depende do catálogo VALV (recebem {valv} como 2º
 // argumento); os demais continuam chamados com um único argumento, como antes.
-const VALV_MODULES = new Set(['reduc', 'reducAr', 'reducAgua', 'reducSuper']);
+const VALV_MODULES = new Set(['reduc', 'reducAr', 'reducAgua', 'reducSuper', 'flashcomp']);
 
 // módulos cujo cálculo depende do catálogo PURG (recebem {purg} como 2º
 // argumento). Mesmo padrão do VALV, catálogo separado.

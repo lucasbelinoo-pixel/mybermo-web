@@ -8,7 +8,7 @@ import {
   computePurg, computePSV, computeTanque, computeBicoInj, computeSensorTemp,
   computeVeloc, computeCondens, computeResTubo,
   computePerdaTub, computeEfluente, computeCustoVap, computeTubVapor,
-  computeTubAgua, computeFlash, computeDessuper,
+  computeTubAgua, computeFlash, computeFlashComp, computeDessuper,
   computeSteamProps, computeUnitConv, computeMatCurve,
   VALV, PURG,
 } from './lib/engine.js';
@@ -146,6 +146,19 @@ console.assert(perdatub.invalid === false, 'perdatub: não deveria ser inválido
 console.assert(perdatub.hasIsol === true && perdatub.isol.loss < perdatub.bare.loss, 'perdatub: isolamento deveria reduzir a perda de calor');
 console.assert(perdatub.econMes != null && perdatub.econMes > 0, 'perdatub: economia mensal deveria ser calculada (pci/rhof/preco informados)');
 
+// 13b) curva[] (série "perda × espessura" que o gráfico chartLoss do cliente
+//      plota — antes recalculada no cliente com insul()/hAir(), removidas no
+//      Bloco 3; agora o servidor devolve a série pronta).
+console.assert(Array.isArray(perdatub.curva) && perdatub.curva.length === 29, `perdatub: curva deveria ter 29 pontos (N=28), obtido ${perdatub.curva && perdatub.curva.length}`);
+console.assert(perdatub.curva[0].esp === 0 && Math.abs(perdatub.curva[0].loss - perdatub.bare.loss) < 1e-9, 'perdatub: curva[0] (espessura 0) deveria bater com a perda sem isolamento (bare.loss)');
+console.assert(perdatub.curva[perdatub.curva.length - 1].esp === Math.max(24, Math.ceil(50 * 2.5 / 2) * 2), `perdatub: última espessura da curva deveria seguir a grade xmax=max(24, ceil(espi*2.5/2)*2) com espi=50 (input do teste), obtido ${perdatub.curva[perdatub.curva.length - 1].esp}`);
+console.assert(perdatub.curva.every((p, i) => i === 0 || p.loss <= perdatub.curva[i - 1].loss), 'perdatub: a perda deveria cair (ou manter-se) monotonicamente conforme a espessura do isolamento aumenta');
+console.assert(perdatub.curva.every(p => p.loss > 0), 'perdatub: todo ponto da curva deveria ter perda > 0 (plausibilidade física)');
+
+// 13c) sem isolamento (espi=0) -> curva deve ser null (mesmo guard que hasIsol)
+const perdatubSemIsol = computePerdaTub({ od2: 60.3, esp: 3.91, L: 50, emiss: 0.8, Top: 180, Tamb: 25, wind: 1 });
+console.assert(perdatubSemIsol.invalid === false && perdatubSemIsol.hasIsol === false && perdatubSemIsol.curva === null, 'perdatub: sem isolamento, curva deveria ser null (nada para o cliente desenhar)');
+
 // 14) Efluente líquido: 5000 kg/h de 80->40°C (cp=4.186 kJ/kg·K), secundário 3000 kg/h a 20°C
 const efluente = computeEfluente({
   meff: 5000, cpeffK: 4.186, tin: 80, tout: 40, msec: 3000, cpsecK: 4.186, tinsec: 20,
@@ -192,7 +205,8 @@ console.assert(tubagua.summary.suc > 0 && tubagua.summary.rec === 0, 'tubagua: p
 console.assert(tubagua.pump.npshd != null && tubagua.pump.powCV != null, 'tubagua: NPSHd e potência da bomba deveriam ser calculados');
 
 // 18) Estudo de vapor flash (núcleo termodinâmico + viabilidade — migração parcial;
-//     purgador/estação complementar permanecem no cliente): vCon=5000 kg/h, 10->3 barg
+//     a seleção de purgador/modelo de válvula ativo permanece no cliente, estado
+//     de UI): vCon=5000 kg/h, 10->3 barg
 const flash = computeFlash({
   vCon: 5000, Palim: 10, Preev: 3, Pcon: 0,
   PCI: 8600, rho: 1, precoRaw: 2.5, precoUn: 'm3', hd: 24, dm: 30, inv: 1000, co2: 2,
@@ -202,6 +216,26 @@ console.assert(flash.invalid === false, 'flash: não deveria ser inválido');
 console.assert(flash.x > 0 && flash.x < 1, 'flash: fração de flash deveria estar entre 0 e 1');
 console.assert(Math.abs(flash.vFlash + flash.vDren - flash.vCon) < 1e-6, 'flash: vFlash+vDren deveria bater com vCon');
 console.assert(flash.tank && flash.tank.modelo === 'VD13-5', 'flash: tanque selecionado deveria ser o VD13-5 (5 m³/h < 5)');
+
+// 18b) Estação complementar do flash (Bloco 3 — antes compStation() no cliente):
+//      W=1000 kg/h, P1=4 barg -> P2=0.8 barg, modelo já escolhido '32470'
+const flashComp = computeFlashComp({ on: 'S', W: 1000, P1: 4, P2: 0.8, sch: '40', dnin: '4', dnout: '4', modelo: '32470' });
+dump('flashcomp (estação complementar do flash)', flashComp);
+console.assert(flashComp.invalid === false, 'flashcomp: não deveria ser inválido (entradas válidas)');
+console.assert(flashComp.CVp != null && flashComp.CVp > 0, 'flashcomp: CVp deveria ser calculado e > 0');
+console.assert(flashComp.vin != null && flashComp.vin > 0 && flashComp.vout != null && flashComp.vout > 0, 'flashcomp: vin/vout deveriam ser calculados e > 0');
+console.assert(flashComp.valvSz != null, 'flashcomp: deveria escolher uma bitola para o modelo 32470 nessas condições');
+console.assert(flashComp.clin === 'Baixa' || flashComp.clin === 'OK' || flashComp.clin === 'Alta', 'flashcomp: clin deveria ser uma classificação válida');
+console.assert(flashComp.p1ok === true, 'flashcomp: P1=4 barg deveria estar dentro do PMax do modelo 32470');
+
+// 18c) estação complementar desabilitada (on:'N') -> invalid:true, sem calcular nada
+const flashCompOff = computeFlashComp({ on: 'N' });
+console.assert(flashCompOff.invalid === true && flashCompOff.on === false, 'flashcomp: on=N deveria retornar invalid (estação não utilizada)');
+
+// 18d) entradas inválidas (P1<=P2) com a estação habilitada -> invalid:true, on:true
+//      (o cliente usa isso para mostrar "preencha vazão e pressões", não um erro)
+const flashCompInv = computeFlashComp({ on: 'S', W: 1000, P1: 2, P2: 4, sch: '40', dnin: '4', dnout: '4', modelo: '32470' });
+console.assert(flashCompInv.invalid === true && flashCompInv.on === true, 'flashcomp: P1<=P2 deveria ser inválido mas sinalizar que a estação está habilitada (on:true)');
 
 // 19) Dessuperaquecimento de NH3: 1 compressor de 100 kW, Tevap=-10°C, Tcond=35->33.7°C
 const dessuper = computeDessuper({
@@ -271,6 +305,17 @@ console.assert(rowCustom.rcv !== rowBase.rcv, 'valv custom: rcv (CVp/cvv) deveri
 console.assert(reducCustom.CVp === reducBaseline.CVp, 'valv custom: CVp (Cv requerido, não depende do catálogo) deveria continuar igual');
 // e o objeto VALV default do módulo (usado pelos testes acima, sem 2º argumento) não foi mutado:
 console.assert(VALV['12440'].sizes['1'] === 11.8, 'valv custom: o VALV default do módulo não deveria ter sido alterado pelo teste (isolamento via clone)');
+
+// 23b) computeFlashComp também aceita o catálogo VALV customizado (2º arg, {valv}) —
+//      mesmo dispatcher/padrão do reduc; PMax do modelo customizado deve refletir
+//      no p1ok, e o Cv customizado deve mudar a bitola/abertura escolhida.
+const customValv2 = JSON.parse(JSON.stringify(VALV));
+customValv2['32470'].PMax_barg = 1; // "admin" reduz o PMax abaixo de P1=4 barg
+const flashCompCustomPmax = computeFlashComp({ on: 'S', W: 1000, P1: 4, P2: 0.8, sch: '40', dnin: '4', dnout: '4', modelo: '32470' }, { valv: customValv2 });
+dump('flashcomp com catálogo VALV customizado (32470: PMax -> 1 barg)', { baseline_p1ok: flashComp.p1ok, baseline_pmax: flashComp.pmax, custom_p1ok: flashCompCustomPmax.p1ok, custom_pmax: flashCompCustomPmax.pmax });
+console.assert(flashCompCustomPmax.pmax === 1, `flashcomp custom: pmax deveria refletir o catálogo customizado (1), obtido ${flashCompCustomPmax.pmax}`);
+console.assert(flashCompCustomPmax.p1ok === false, 'flashcomp custom: P1=4 barg > PMax customizado (1 barg) deveria marcar p1ok=false');
+console.assert(VALV['32470'].PMax_barg !== 1, 'flashcomp custom: o VALV default do módulo não deveria ter sido alterado pelo teste (isolamento via clone)');
 
 // 24) Catálogo PURG como parâmetro (2º arg, {purg}) — mesmo padrão do VALV,
 //     replicado para purgadores (mesmo compute, catálogo trocável).
