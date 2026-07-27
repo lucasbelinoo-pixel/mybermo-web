@@ -23,6 +23,10 @@
 // usuário; mesmo formato que o cliente usa em CURRENT_USER.block/modAllowed
 // — ver index.html). Linhas antigas podem ter modules:{} (default da coluna);
 // tratamos qualquer valor que não seja array como "nenhum módulo bloqueado".
+// multi_login (boolean, default false): política de LOGIN ÚNICO — por
+// padrão, logar numa máquina nova derruba as sessões anteriores do mesmo
+// usuário (ver mbLoadProfileAndEnter/MB.sb.auth.signOut({scope:'others'}) em
+// index.html); exceções: admins (sempre) e quem tem multi_login=true aqui.
 import { requireUser, isAdmin, AuthError } from '../lib/auth.js';
 
 const SUPABASE_URL = 'https://rzvuokutcuybzwlkmefn.supabase.co'; // mesmo valor de lib/catalogs.js e lib/auth.js
@@ -122,7 +126,7 @@ export default async function handler(req, res) {
     if (action === 'list') {
       const [authResp, profResp] = await Promise.all([
         authAdminFetch('/users?per_page=1000', serviceKey),
-        restFetch('/profiles?select=id,nome,empresa,is_admin,modules', serviceKey),
+        restFetch('/profiles?select=id,nome,empresa,is_admin,modules,multi_login', serviceKey),
       ]);
       if (!authResp.ok) {
         res.status(502).json({ error: 'Falha ao listar usuários (Supabase Auth): ' + upstreamMsg(authResp.json, `HTTP ${authResp.status}`) });
@@ -144,6 +148,7 @@ export default async function handler(req, res) {
           nome: p.nome || (u.user_metadata && u.user_metadata.nome) || '',
           adm: p.is_admin === true,
           modules: normModules(p.modules),
+          multiLogin: p.multi_login === true,
           ativo,
           criado_em: u.created_at || null,
         };
@@ -199,8 +204,9 @@ export default async function handler(req, res) {
       const hasNome = typeof body.nome === 'string';
       const hasAdm = typeof body.adm === 'boolean';
       const hasModules = Array.isArray(body.modules);
-      if (!hasNome && !hasAdm && !hasModules) {
-        res.status(400).json({ error: 'Nada para atualizar (informe nome, adm e/ou modules).' });
+      const hasMultiLogin = typeof body.multi_login === 'boolean';
+      if (!hasNome && !hasAdm && !hasModules && !hasMultiLogin) {
+        res.status(400).json({ error: 'Nada para atualizar (informe nome, adm, modules e/ou multi_login).' });
         return;
       }
       if (hasAdm && body.adm === false && id === caller.id) {
@@ -211,6 +217,11 @@ export default async function handler(req, res) {
       if (hasNome) patch.nome = String(body.nome).trim();
       if (hasAdm) patch.is_admin = body.adm;
       if (hasModules) patch.modules = body.modules;
+      // Login único (política de sessão, ver mbLoadProfileAndEnter em
+      // index.html): admins NUNCA são derrubados (independente deste flag);
+      // para os demais, multi_login=true é a única exceção que permite mais
+      // de uma sessão ativa ao mesmo tempo.
+      if (hasMultiLogin) patch.multi_login = body.multi_login;
       const patchResp = await restFetch(`/profiles?id=eq.${encodeURIComponent(id)}`, serviceKey, {
         method: 'PATCH',
         headers: { Prefer: 'return=minimal' },
