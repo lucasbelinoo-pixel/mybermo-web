@@ -55,7 +55,7 @@ import {
   PURG,
 } from '../lib/engine.js';
 import { loadValv, loadCatalogo } from '../lib/catalogs.js';
-import { requireUser, AuthError } from '../lib/auth.js';
+import { requireUser, getProfileCached, AuthError } from '../lib/auth.js';
 
 const HANDLERS = {
   reduc: computeReduc,
@@ -96,14 +96,56 @@ const VALV_MODULES = new Set(['reduc', 'reducAr', 'reducAgua', 'reducSuper', 'fl
 // operação — ver nota em lib/engine.js#computeFlash.
 const PURG_MODULES = new Set(['purg', 'purgcurve', 'flash']);
 
+// Bloqueio de módulo no SERVIDOR (hardening): profiles.modules é uma
+// blocklist de ids que hoje só a UI respeitava (modAllowed() em index.html
+// esconde os botões, mas nada impedia uma chamada direta a /api/calc).
+// Mapa: módulo do dispatcher (chave de HANDLERS acima) -> id que o CLIENTE
+// usa em profiles.modules — os MESMOS ids de MENU[].go / MB_MODULE_CATALOG
+// (ver index.html, const MENU / const MB_MODULE_CATALOG). Descoberto lendo,
+// no cliente, cada tela (renderReduc/renderValv/renderPurg/... ou a IIFE do
+// módulo) e conferindo com qual `module` ela chama /api/calc — várias telas
+// disparam mais de um module do servidor (ex.: tela "purg" chama tanto
+// module:'purg' quanto module:'purgcurve'; tela "flash" chama 'flash' e
+// 'flashcomp' — ver comentário de PURG_MODULES/VALV_MODULES acima). Módulos
+// sem entrada aqui (não deveria haver nenhum — todas as chaves de HANDLERS
+// estão mapeadas) simplesmente não são bloqueáveis (fail-open, ver abaixo).
+const MODULE_BLOCK_ID = {
+  reduc: 'reduc',
+  reducAr: 'reduc_ar',
+  reducAgua: 'reduc_agua',
+  reducSuper: 'reduc_super',
+  geracaosuper: 'geracao_super',
+  purg: 'purg',
+  purgcurve: 'purg',
+  psv: 'valv', // tela "Válvula de Segurança" (go:'valv') chama module:'psv'
+  tanque: 'tanque',
+  bicoinj: 'bicoinj',
+  sensortemp: 'sensortemp',
+  veloc: 'veloc',
+  condens: 'condens',
+  restub: 'restub',
+  perdatub: 'perdatub',
+  efluente: 'efluente',
+  custovap: 'custovap',
+  tubvapor: 'tubvapor',
+  tubagua: 'tubagua',
+  flash: 'flash',
+  flashcomp: 'flash', // "estação complementar" do estudo de vapor flash — mesma tela
+  dessuper: 'dessuper',
+  steamprops: 'vapor', // botão especial "Propriedades do vapor saturado"
+  unitconv: 'unidades', // botão especial "Conversão de unidades"
+  matcurve: 'material', // botão especial "Curva Pressão × Temperatura por material"
+};
+
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
     res.status(405).json({ error: 'Method not allowed' });
     return;
   }
 
+  let user;
   try {
-    await requireUser(req);
+    ({ user } = await requireUser(req));
   } catch (err) {
     const status = err instanceof AuthError ? err.status : 401;
     res.status(status).json({ error: (err && err.message) || 'não autenticado' });
@@ -118,6 +160,23 @@ export default async function handler(req, res) {
     if (!fn) {
       res.status(400).json({ error: `Módulo desconhecido: ${mod}` });
       return;
+    }
+
+    // Fail-OPEN só para o bloqueio de módulo em si (perfil ausente/erro de
+    // rede/tabela não derruba usuário legítimo) — a autenticação acima
+    // (requireUser) continua fail-closed. Admin NUNCA é bloqueado.
+    try {
+      const profile = await getProfileCached(user && user.id);
+      if (profile && !profile.isAdmin) {
+        const blockId = MODULE_BLOCK_ID[mod];
+        if (blockId && profile.modules.indexOf(blockId) >= 0) {
+          res.status(403).json({ error: `Acesso a este módulo está bloqueado para o seu usuário. Fale com o administrador.` });
+          return;
+        }
+      }
+    } catch (e) {
+      // nunca bloquear por falha aqui — só logamos para diagnóstico
+      console.error('api/calc: falha ao checar bloqueio de módulo (fail-open)', e);
     }
 
     let result;
