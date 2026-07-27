@@ -10,6 +10,7 @@ import {
   computePerdaTub, computeEfluente, computeCustoVap, computeTubVapor,
   computeTubAgua, computeFlash, computeFlashComp, computeDessuper,
   computeSteamProps, computeUnitConv, computeMatCurve,
+  computeGeracaoSuper,
   VALV, PURG,
 } from './lib/engine.js';
 
@@ -413,5 +414,61 @@ console.assert(purgRowCustom.fs !== purgRowBase.fs, 'purg custom: fs (fator de s
 console.assert(purgCustom.dp === purgBaseline.dp && purgCustom.Tcond === purgBaseline.Tcond, 'purg custom: dp/Tcond (não dependem do catálogo) deveriam continuar iguais');
 // e o PURG default do módulo (usado pelos testes acima, sem 2º argumento) não foi mutado:
 console.assert(PURG[purgIdx].bitolas[0].curva !== '0 * x + 1', 'purg custom: o PURG default do módulo não deveria ter sido alterado pelo teste (isolamento via clone)');
+
+// 25) computeGeracaoSuper — vapor de geração/superaquecido (migrado nesta rodada,
+//     IAPWS-IF97 Região 2). Caso sem superaquecimento (queda de pressão pequena,
+//     título 95% na entrada continua com título <100% na saída).
+const geracaoSat = computeGeracaoSuper({ p1: 10, p2: 4, flow: 8000, x1: 0.95, tw: 95, xd: 1, din: '2.1/2', schin: '40', dout: '3', schout: '40' });
+dump('geracaosuper (P1=10, P2=4, x1=95% — sem superaquecimento esperado)', geracaoSat);
+console.assert(geracaoSat.invalid === false, 'geracaosuper: não deveria ser inválido');
+console.assert(geracaoSat.Ts1 > geracaoSat.Ts2, 'geracaosuper: Ts1 (P1 maior) deveria ser maior que Ts2');
+console.assert(geracaoSat.superh === false, 'geracaosuper: com queda pequena e x1=95% não deveria superaquecer');
+console.assert(geracaoSat.x2 > 0 && geracaoSat.x2 < 1, `geracaosuper: título de saída deveria ficar entre 0 e 1, obtido ${geracaoSat.x2}`);
+console.assert(Math.abs(geracaoSat.Tout - geracaoSat.Ts2) < 1e-9, 'geracaosuper: sem superaquecimento, Tout deveria ser igual a Ts2 (Tsat de P2)');
+console.assert(geracaoSat.vin > 0 && geracaoSat.vout > 0, 'geracaosuper: velocidades de entrada/saída deveriam ser positivas');
+
+// 26) computeGeracaoSuper — cenário com superaquecimento real (queda grande de
+//     pressão, título 100% na entrada) — exercita if97Tsup/if97v (bisseção +
+//     equação de estado Região 2, verbatim do que saiu do cliente nesta rodada).
+const geracaoSup = computeGeracaoSuper({ p1: 40, p2: 1, flow: 5000, x1: 1, tw: 20, xd: 0.98, din: '2.1/2', schin: '40', dout: '4', schout: '40' });
+dump('geracaosuper (P1=40, P2=1, x1=100% — superaquecimento esperado)', geracaoSup);
+console.assert(geracaoSup.invalid === false, 'geracaosuper (superh): não deveria ser inválido');
+console.assert(geracaoSup.superh === true, 'geracaosuper (superh): queda grande + título 100% deveria gerar vapor superaquecido');
+console.assert(geracaoSup.x2 === 1, 'geracaosuper (superh): título de saída deveria ser 100% (1) quando superaquecido');
+console.assert(geracaoSup.dTsh > 0 && geracaoSup.dTsh < 200, `geracaosuper (superh): ΔTsh deveria ser um valor positivo plausível, obtido ${geracaoSup.dTsh}`);
+console.assert(Math.abs(geracaoSup.Tout - (geracaoSup.Ts2 + geracaoSup.dTsh)) < 1e-6, 'geracaosuper (superh): Tout deveria ser Ts2 + ΔTsh');
+console.assert(geracaoSup.qw != null && geracaoSup.qw > 0, 'geracaosuper (superh): com dessuperaquecimento configurado (xd=98%), qw (água de injeção) deveria ser calculado e positivo');
+
+// 27) computeGeracaoSuper — validação (sem round-trip desnecessário: o cliente já
+//     filtra isso localmente antes de disparar o fetch; aqui é defesa em profundidade).
+const geracaoIncomplete = computeGeracaoSuper({ p1: NaN, p2: 4, flow: 8000, x1: 1 });
+console.assert(geracaoIncomplete.invalid === true && geracaoIncomplete.errReason === 'incomplete', 'geracaosuper: P1 ausente deveria retornar invalid=true, errReason="incomplete"');
+const geracaoP1LEp2 = computeGeracaoSuper({ p1: 4, p2: 10, flow: 8000, x1: 1 });
+console.assert(geracaoP1LEp2.invalid === true && geracaoP1LEp2.errReason === 'p1LEp2', 'geracaosuper: P1<=P2 deveria retornar invalid=true, errReason="p1LEp2"');
+
+// 28) IF97 Região 2 — conferência com ponto de referência publicado da norma
+//     IAPWS-IF97 (Tabela de verificação oficial): a 1 MPa (abs) / 300°C,
+//     v ≈ 0,25799 m³/kg. Acessado indiretamente via computeVeloc (type 'vsup'),
+//     que agora calcula ρ=1/v no servidor a partir de press(barg)/temp(°C) —
+//     mesmo IF97 usado por computeGeracaoSuper, exercitado por um caminho de
+//     código diferente.
+const bargRef = (1.0 - 0.101325) * 10; // 1 MPa abs -> barg
+const velocRef = computeVeloc({ flow: 1000, unit: 'kgh', type: 'vsup', press: bargRef, temp: 300 });
+const vRef = 1 / velocRef.rho;
+dump('computeVeloc vsup (1 MPa abs, 300°C) — conferência IF97 vs. tabela de referência', { rho: velocRef.rho, v: vRef, refEsperado: 0.25799 });
+console.assert(Math.abs(vRef - 0.25799) < 1e-3, `IF97: v(1MPa,300°C) deveria bater com a tabela de referência (~0,25799 m³/kg), obtido ${vRef}`);
+
+// 29) v decrescente com P a temperatura fixa (Região 2, comportamento físico
+//     esperado de um gás/vapor comprimido) — mesmo par câmbio já não depende
+//     mais de if97v no cliente (setVaporRho), só no servidor.
+const velocLoP = computeVeloc({ flow: 1000, unit: 'kgh', type: 'vsup', press: 5, temp: 300 });
+const velocHiP = computeVeloc({ flow: 1000, unit: 'kgh', type: 'vsup', press: 20, temp: 300 });
+console.assert(velocHiP.rho > velocLoP.rho, `IF97: ρ deveria crescer (v deveria cair) com P a T fixa — ρ(5 barg)=${velocLoP.rho}, ρ(20 barg)=${velocHiP.rho}`);
+
+// 30) computeVeloc vsup sem press/temp (defesa em profundidade — não deveria
+//     travar, só não conseguir resolver rho automaticamente; sem rho explícito
+//     e unit='kgh', cai no mesmo errRho de antes).
+const velocNoPT = computeVeloc({ flow: 1000, unit: 'kgh', type: 'vsup' });
+console.assert(velocNoPT.invalid === true && velocNoPT.errRho === true, 'computeVeloc vsup sem press/temp/rho: deveria retornar invalid=true, errRho=true (mesmo comportamento de antes para rho ausente)');
 
 console.log('\nTodos os testes (asserts) passaram sem lançar exceção.');

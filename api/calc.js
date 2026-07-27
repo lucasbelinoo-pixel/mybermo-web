@@ -50,6 +50,7 @@ import {
   computeSteamProps,
   computeUnitConv,
   computeMatCurve,
+  computeGeracaoSuper,
   VALV,
   PURG,
 } from '../lib/engine.js';
@@ -81,6 +82,7 @@ const HANDLERS = {
   steamprops: computeSteamProps,
   unitconv: computeUnitConv,
   matcurve: computeMatCurve,
+  geracaosuper: computeGeracaoSuper,
 };
 
 // módulos cujo cálculo depende do catálogo VALV (recebem {valv} como 2º
