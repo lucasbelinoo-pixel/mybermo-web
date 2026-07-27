@@ -88,8 +88,11 @@ const HANDLERS = {
 const VALV_MODULES = new Set(['reduc', 'reducAr', 'reducAgua', 'reducSuper', 'flashcomp']);
 
 // módulos cujo cálculo depende do catálogo PURG (recebem {purg} como 2º
-// argumento). Mesmo padrão do VALV, catálogo separado.
-const PURG_MODULES = new Set(['purg', 'purgcurve']);
+// argumento). Mesmo padrão do VALV, catálogo separado. 'flash' entrou aqui
+// porque computeFlash agora também devolve a tabela de capacidade do
+// purgador de drenagem (purgModels) para todos os modelos/bitolas, no ΔP de
+// operação — ver nota em lib/engine.js#computeFlash.
+const PURG_MODULES = new Set(['purg', 'purgcurve', 'flash']);
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {

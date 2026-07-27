@@ -261,6 +261,40 @@ console.assert(flash.x > 0 && flash.x < 1, 'flash: fração de flash deveria est
 console.assert(Math.abs(flash.vFlash + flash.vDren - flash.vCon) < 1e-6, 'flash: vFlash+vDren deveria bater com vCon');
 console.assert(flash.tank && flash.tank.modelo === 'VD13-5', 'flash: tanque selecionado deveria ser o VD13-5 (5 m³/h < 5)');
 
+// 18a) purgModels — piloto UX (removeu flashCore()/purgFn()/purgCapacity() do
+//      cliente): computeFlash agora devolve, junto do núcleo termodinâmico, a
+//      tabela de capacidade de TODOS os modelos/bitolas do catálogo PURG no
+//      ΔP de operação (dPdren) — mesmo formato que computePurg usa (ver
+//      lib/engine.js#purgCapTable). O cliente só filtra essa tabela em
+//      memória (isAtivo/família); nenhuma curva é avaliada no navegador.
+console.assert(Array.isArray(flash.purgModels) && flash.purgModels.length === PURG.length,
+  'flash: purgModels deveria trazer uma linha por modelo do catálogo PURG');
+const flashPurgSample = flash.purgModels.find(m => m.modelo === 'PT61 - 10');
+console.assert(flashPurgSample && Array.isArray(flashPurgSample.bitolas) && flashPurgSample.bitolas.length === 3,
+  'flash: purgModels deveria incluir as 3 bitolas cadastradas do modelo PT61 - 10');
+const flashPurgBit = flashPurgSample.bitolas[0];
+console.assert(typeof flashPurgBit.cap === 'number' && flashPurgBit.cap >= 0 && typeof flashPurgBit.trava === 'boolean',
+  `flash: bitola de purgModels deveria ter cap (número >=0) e trava (booleano), obtido cap=${flashPurgBit.cap} trava=${flashPurgBit.trava}`);
+console.assert(flashPurgBit.trava === (flashPurgBit.acima || flashPurgBit.cap < flash.vDren),
+  'flash: trava deveria refletir "ΔP acima do máximo" OU "capacidade < vazão a drenar" no dPdren/vDren do flash (mesmo critério que o cliente usava em purgBitolasOK, agora pronto do servidor)');
+dump('flash: purgModels (amostra PT61 - 10)', { dPdren: flash.dPdren, vDren: flash.vDren, bitolas: flashPurgSample.bitolas });
+
+// 18a-2) purgModels também aceita o catálogo PURG customizado (2º arg,
+//        {purg}) — mesmo mecanismo de computePurg, plugado no cálculo
+//        principal do flash (ver PURG_MODULES em api/calc.js).
+const flashPurgIdx = PURG.findIndex(m => m.modelo === 'PT61 - 10');
+console.assert(flashPurgIdx >= 0, 'flash custom: modelo "PT61 - 10" deveria existir no catálogo PURG');
+const customPurgForFlash = JSON.parse(JSON.stringify(PURG));
+customPurgForFlash[flashPurgIdx].bitolas[0].curva = '0 * x + 1'; // curva "editada pelo admin": capacidade quase nula
+const flashCustomPurg = computeFlash({
+  vCon: 5000, Palim: 10, Preev: 3, Pcon: 0,
+  PCI: 8600, rho: 1, precoRaw: 2.5, precoUn: 'm3', hd: 24, dm: 30, inv: 1000, co2: 2,
+}, { purg: customPurgForFlash });
+const flashCustomBit = flashCustomPurg.purgModels[flashPurgIdx].bitolas[0];
+dump('flash: purgModels com catálogo PURG customizado (PT61-10, 1ª bitola -> capacidade quase nula)', { baseline_cap: flashPurgBit.cap, custom_cap: flashCustomBit.cap });
+console.assert(flashCustomBit.cap === 1, `flash custom: cap deveria refletir a curva customizada (0*x+1=1) no dPdren do flash, obtido ${flashCustomBit.cap}`);
+console.assert(PURG[flashPurgIdx].bitolas[0].curva !== '0 * x + 1', 'flash custom: o PURG default do módulo não deveria ter sido alterado pelo teste (isolamento via clone)');
+
 // 18b) Estação complementar do flash (Bloco 3 — antes compStation() no cliente):
 //      W=1000 kg/h, P1=4 barg -> P2=0.8 barg, modelo já escolhido '32470'
 const flashComp = computeFlashComp({ on: 'S', W: 1000, P1: 4, P2: 0.8, sch: '40', dnin: '4', dnout: '4', modelo: '32470' });
