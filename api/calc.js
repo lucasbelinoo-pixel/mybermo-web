@@ -56,6 +56,7 @@ import {
 } from '../lib/engine.js';
 import { loadValv, loadCatalogo } from '../lib/catalogs.js';
 import { requireUser, getProfileCached, AuthError } from '../lib/auth.js';
+import { checkRateLimit } from '../lib/rate.js';
 
 const HANDLERS = {
   reduc: computeReduc,
@@ -150,6 +151,31 @@ export default async function handler(req, res) {
     const status = err instanceof AuthError ? err.status : 401;
     res.status(status).json({ error: (err && err.message) || 'não autenticado' });
     return;
+  }
+
+  // Rate limit por usuário (anti-macro/loop infinito de cálculos) — ver
+  // lib/rate.js para o desenho completo (2 camadas: minuto via Postgres/
+  // rate_hit, autoritativa; hora em memória, best-effort). FAIL-OPEN: só
+  // bloqueia quando a checagem CONFIRMA o estouro; qualquer falha na RPC
+  // (rede, função ainda não criada no Supabase, etc.) deixa passar — a
+  // autenticação acima (requireUser) já é quem garante fail-CLOSED de
+  // verdade. Roda logo após a autenticação, ANTES de parsear o corpo/
+  // escolher o módulo, para não gastar trabalho num pedido que vai ser
+  // rejeitado de qualquer forma. Admin NÃO é isento de propósito: uma
+  // macro/loop pode rodar numa conta admin também, e a proteção aqui é
+  // contra volume anômalo de requisições, não contra o que o usuário tem
+  // permissão de calcular (isso é o bloqueio de módulo, abaixo).
+  try {
+    const rl = await checkRateLimit(user && user.id);
+    if (rl.limited) {
+      res.setHeader('Retry-After', String(rl.retryAfterSeconds));
+      res.status(429).json({ error: 'Muitos cálculos em sequência. Aguarde alguns instantes e tente novamente.' });
+      return;
+    }
+  } catch (e) {
+    // defensivo: checkRateLimit já é fail-open internamente e não deveria
+    // lançar, mas se lançar mesmo assim, não bloqueia o cálculo por isso.
+    console.error('api/calc: falha ao checar rate limit (fail-open)', e);
   }
 
   try {
