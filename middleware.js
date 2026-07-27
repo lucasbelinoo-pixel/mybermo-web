@@ -16,6 +16,16 @@ export default function middleware(request) {
 
   const USER = process.env.SITE_USER || 'bermo';
   const auth = request.headers.get('authorization') || '';
+
+  // /api/users usa o MESMO cabeçalho Authorization para o token do Supabase
+  // (Bearer), o que sobrescreve a credencial Basic da porta e fazia o navegador
+  // pedir senha de novo. Deixa passar: o endpoint valida o token e exige admin
+  // por conta própria (autenticação mais forte que a porta).
+  try {
+    const path = new URL(request.url).pathname;
+    if (path === '/api/users' && auth.startsWith('Bearer ')) return next();
+  } catch (e) {}
+
   if (auth.startsWith('Basic ')) {
     try {
       const decoded = atob(auth.slice(6));
