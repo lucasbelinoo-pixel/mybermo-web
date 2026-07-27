@@ -3,8 +3,6 @@
   "private": true,
   "type": "module",
   "dependencies": {
-    "@vercel/functions": "latest",
-    "puppeteer-core": "24.40.0",
-    "@sparticuz/chromium": "147.0.0"
+    "@vercel/functions": "latest"
   }
 }
