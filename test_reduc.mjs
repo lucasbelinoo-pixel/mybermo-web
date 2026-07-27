@@ -5,7 +5,7 @@
 // Rodar com: node test_reduc.mjs
 import {
   computeReduc, computeReducAr, computeReducAgua, computeReducSuper,
-  computePurg, computePSV, computeTanque, computeBicoInj, computeSensorTemp,
+  computePurg, computePurgCurve, computePSV, computeTanque, computeBicoInj, computeSensorTemp,
   computeVeloc, computeCondens, computeResTubo,
   computePerdaTub, computeEfluente, computeCustoVap, computeTubVapor,
   computeTubAgua, computeFlash, computeFlashComp, computeDessuper,
@@ -76,6 +76,39 @@ const bk45 = purg.models.find(m => m.modelo === 'BK45'); // lei de potência: 15
 const expectedBK45 = 154.2 * Math.pow(6, 0.401);
 console.assert(Math.abs(bk45.bitolas[0].cap - expectedBK45) < 1e-6, 'purg: BK45 (lei de potência) divergiu');
 
+// 5b) computePurgCurve (Bloco 4 — série pronta do gráfico/folha técnica do
+// purgador, substituindo purgFn/new Function no cliente). BK45 (1/2"):
+// lei de potência 154.2 * x**0.401 — fisicamente crescente com ΔP (vazão
+// cresce com a diferença de pressão através do orifício fixo), sem pico.
+const pc1 = computePurgCurve({ modelo: 'BK45', sz: '1/2', pin: 10, pout: 4, flow: 100 });
+console.log('\n=== computePurgCurve (BK45, 1/2", pin=10, pout=4) ===');
+console.log(JSON.stringify({ invalid: pc1.invalid, dp: pc1.dp, cap: pc1.cap, dpmax: pc1.dpmax, xmax: pc1.xmax, nPts: pc1.curva.length, first: pc1.curva[0], last: pc1.curva[pc1.curva.length - 1] }, null, 2));
+console.assert(pc1.invalid === false, 'purgCurve: BK45 não deveria ser inválido');
+console.assert(pc1.curva.length === 41, 'purgCurve: série deveria ter 41 pontos (N=40), mesma grade do purgChartSVG original');
+console.assert(Math.abs(pc1.cap - expectedBK45) < 1e-6, 'purgCurve: cap no dp atual deveria bater com a fórmula verbatim (154.2 * x**0.401)');
+console.assert(pc1.curva.every((p, i) => i === 0 || p.cap >= pc1.curva[i - 1].cap - 1e-9), 'purgCurve: BK45 deveria ser monotonicamente crescente (lei de potência, expoente positivo <1)');
+console.assert(pc1.curva.every(p => p.cap >= 0), 'purgCurve: capacidade nunca deveria ser negativa (Math.max(fn(x),0), mesma regra do cliente)');
+console.assert(Math.abs(pc1.xmax - Math.max(pc1.dpmax || 6, pc1.dp * 1.15, 1)) < 1e-9, 'purgCurve: xmax deveria seguir a grade original (max(dpmax||6, dp*1.15, 1))');
+console.assert(pc1.dpmax === 22, 'purgCurve: dpmax da bitola 1/2" do BK45 deveria ser 22 (verbatim do catálogo PURG)');
+
+// 5c) FTV 120 (2.1/2"): quadrática com coeficiente líder negativo
+// (-251.15*x²+5079.5*x+24214) — tem um pico (vértice em x=-b/2a≈10,11 barg)
+// dentro da faixa plotada (dpmax=12,3), então a série NÃO é monotônica: sobe
+// e depois desce perto do fim — comportamento físico esperado de um fit
+// polinomial de bancada de teste (capacidade "achata"/reduz perto do limite
+// da bitola). Mesmo assim cap deve continuar > 0 em toda a série.
+const pc2 = computePurgCurve({ modelo: 'FTV 120', sz: '2.1/2', pin: 10, pout: 4, flow: 100 });
+console.assert(pc2.invalid === false, 'purgCurve: FTV 120 não deveria ser inválido');
+console.assert(pc2.curva.length === 41, 'purgCurve: FTV 120 série deveria ter 41 pontos');
+const pc2Peak = pc2.curva.reduce((mx, p) => Math.max(mx, p.cap), -Infinity);
+const pc2Last = pc2.curva[pc2.curva.length - 1].cap;
+console.assert(pc2Last < pc2Peak, 'purgCurve: FTV 120 deveria ter um pico e cair antes do fim da série (vértice da parábola dentro da faixa plotada)');
+console.assert(pc2.curva.every(p => p.cap >= 0), 'purgCurve: FTV 120 capacidade nunca deveria ser negativa');
+
+// 5d) modelo/bitola inexistente -> invalid, sem lançar exceção
+const pcInv = computePurgCurve({ modelo: 'NAO-EXISTE', sz: '1/2', pin: 10, pout: 4, flow: 100 });
+console.assert(pcInv.invalid === true, 'purgCurve: modelo inexistente deveria retornar invalid:true');
+
 // 6) PSV: vapor saturado, setP=10 barg, backP=0, flow=1000 kg/h
 const psv = computePSV({ media: 'Vapor Saturado', setP: 10, backP: 0, tAgua: 20, tAr: 20, flow: 1000 });
 console.log('\n=== psv (válvula de segurança) ===');
@@ -88,6 +121,17 @@ console.assert('Fig. 037' in psv.bronze, 'psv: bronze Fig.037 deveria estar pres
 // 6b) PSV: caso de erro dependente de unidade (setP < 0.2 -> errCode min_setp)
 const psvErr = computePSV({ media: 'Água', setP: 0.1, backP: 0, tAgua: 20, flow: 100 });
 console.assert(psvErr.errCode === 'min_setp' && psvErr.errRaw === 0.2, 'psv: deveria sinalizar min_setp com errRaw=0.2');
+
+// 6c) PSV: dados prontos p/ as folhas do cliente (Bloco 4 — openPsvReport() e
+// openBronzeReport() leem de LAST_PSV em vez de recalcular calcValv/
+// calcValvANSI/brzCapKgh no cliente; aqui validamos que a resposta do
+// servidor já tem o formato que essas folhas consomem).
+const psvAllRows = [...psv.r911, ...psv.r942];
+console.assert(psvAllRows.length === 16, 'psv: r911+r942 deveriam somar 16 linhas (folha DIN — mesmo total que calcValv devolvia)');
+console.assert(psvAllRows.every(r => typeof r.bocal === 'string'), 'psv: toda linha deveria ter "bocal" (openPsvReport acha a linha clicada por rows.find(r=>r.bocal===bocal))');
+console.assert(new Set(psvAllRows.map(r => r.bocal)).size === 16, 'psv: bocais de r911+r942 deveriam ser únicos (sem colisão de rótulo entre as duas faixas)');
+const brz037 = psv.bronze['Fig. 037'];
+console.assert(Array.isArray(brz037) && brz037.some(r => r.dn === '1' && r.W0 != null), 'psv: bronze["Fig. 037"] deveria ter linha dn="1" com W0 calculado (openBronzeReport acha por rows.find(r=>r.dn===dn))');
 
 // 7) Tanque: água, V=2 m³, T1=20->T2=80°C, aquecimento em 1h, vapor a 4 barg
 const tanque = computeTanque({ cpK: 4.186, rho: 998, V: 2, T1: 20, T2: 80, th: 1, P: 4, rep: 0, xq: 1 });

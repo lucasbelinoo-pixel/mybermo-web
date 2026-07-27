@@ -15,7 +15,8 @@
 //  - VALV (válvulas): reduc, reducAr, reducAgua, reducSuper, flashcomp (estação
 //    complementar do estudo de vapor flash — mesma válvula redutora, modelo já
 //    escolhido pelo cliente).
-//  - PURG (purgadores): purg.
+//  - PURG (purgadores): purg, purgcurve (curva de capacidade de um
+//    modelo/bitola específico, para o gráfico e a folha técnica).
 // PSV usa catálogos próprios (BRZ_MODELS/calcValv), não VALV/PURG — fica de
 // fora. MATDB (materiais, curva P×T) NÃO é usado por nenhum compute do
 // servidor — computeMatCurve só calcula a curva auxiliar de saturação do
@@ -28,6 +29,7 @@ import {
   computeReducAgua,
   computeReducSuper,
   computePurg,
+  computePurgCurve,
   computePSV,
   computeTanque,
   computeBicoInj,
@@ -57,6 +59,7 @@ const HANDLERS = {
   reducAgua: computeReducAgua,
   reducSuper: computeReducSuper,
   purg: computePurg,
+  purgcurve: computePurgCurve,
   psv: computePSV,
   tanque: computeTanque,
   bicoinj: computeBicoInj,
@@ -83,7 +86,7 @@ const VALV_MODULES = new Set(['reduc', 'reducAr', 'reducAgua', 'reducSuper', 'fl
 
 // módulos cujo cálculo depende do catálogo PURG (recebem {purg} como 2º
 // argumento). Mesmo padrão do VALV, catálogo separado.
-const PURG_MODULES = new Set(['purg']);
+const PURG_MODULES = new Set(['purg', 'purgcurve']);
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
