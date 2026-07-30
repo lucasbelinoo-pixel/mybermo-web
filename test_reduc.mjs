@@ -276,8 +276,15 @@ console.assert(flashPurgSample && Array.isArray(flashPurgSample.bitolas) && flas
 const flashPurgBit = flashPurgSample.bitolas[0];
 console.assert(typeof flashPurgBit.cap === 'number' && flashPurgBit.cap >= 0 && typeof flashPurgBit.trava === 'boolean',
   `flash: bitola de purgModels deveria ter cap (número >=0) e trava (booleano), obtido cap=${flashPurgBit.cap} trava=${flashPurgBit.trava}`);
-console.assert(flashPurgBit.trava === (flashPurgBit.acima || flashPurgBit.cap < flash.vDren),
-  'flash: trava deveria refletir "ΔP acima do máximo" OU "capacidade < vazão a drenar" no dPdren/vDren do flash (mesmo critério que o cliente usava em purgBitolasOK, agora pronto do servidor)');
+// REGRA DE PARTIDA (decisão do usuário): trava agora é ΔP de operação acima
+// do máximo (acimaOperacao) OU P1 sozinho (=Preev, sem contrapressão, como
+// na partida do processo) acima do máximo (acimaPartida) OU capacidade
+// insuficiente. Neste caso (Preev=3 barg, dPMax_barg=11 do PT61-10) P1 não
+// excede o máximo, então acimaPartida=false e o resultado numérico não muda
+// frente à regra antiga — mas a fórmula do assert já reflete os 3 critérios.
+console.assert(flashPurgBit.trava === (flashPurgBit.acimaOperacao || flashPurgBit.acimaPartida || flashPurgBit.cap < flash.vDren),
+  'flash: trava deveria refletir "ΔP de operação acima do máximo" OU "P1 (Preev) acima do máximo (regra de partida)" OU "capacidade < vazão a drenar"');
+console.assert(flashPurgBit.acimaPartida === false, 'flash: Preev=3 barg não deveria exceder o dPMax_barg=11 do PT61-10 (sem trava de partida neste caso)');
 dump('flash: purgModels (amostra PT61 - 10)', { dPdren: flash.dPdren, vDren: flash.vDren, bitolas: flashPurgSample.bitolas });
 
 // 18a-2) purgModels também aceita o catálogo PURG customizado (2º arg,
@@ -414,6 +421,54 @@ console.assert(purgRowCustom.fs !== purgRowBase.fs, 'purg custom: fs (fator de s
 console.assert(purgCustom.dp === purgBaseline.dp && purgCustom.Tcond === purgBaseline.Tcond, 'purg custom: dp/Tcond (não dependem do catálogo) deveriam continuar iguais');
 // e o PURG default do módulo (usado pelos testes acima, sem 2º argumento) não foi mutado:
 console.assert(PURG[purgIdx].bitolas[0].curva !== '0 * x + 1', 'purg custom: o PURG default do módulo não deveria ter sido alterado pelo teste (isolamento via clone)');
+
+// 24b) REGRA DE PARTIDA nos purgadores (decisão do usuário, esta rodada): a
+// trava histórica só comparava o ΔP de OPERAÇÃO (p1-p2) contra dPMax_barg.
+// Mas na PARTIDA do processo ainda não há contrapressão (p2=0) e o purgador
+// vê o P1 inteiro — se P1 sozinho já excede o dPMax_barg, ele nunca abre pra
+// começar a drenar, mesmo que o ΔP de operação em regime esteja OK. Nova
+// regra: trava = acimaOperacao (dp>dPMax) OU acimaPartida (p1>dPMax) OU
+// cap<flow. A CAPACIDADE continua calculada no ΔP de OPERAÇÃO real — só a
+// trava/disponibilidade muda. Catálogo mínimo isolado (1 modelo, 1 bitola,
+// dPMax_barg=8, curva constante "generosa" pra não interferir no critério
+// cap<flow) — testa só a regra de partida, sem ruído de outras variáveis.
+const partidaCatalog = [{ modelo: 'TESTE-PARTIDA', bitolas: [{ sz: '1', dPMax_barg: 8, curva: '1000' }] }];
+
+// p1=10,p2=6,dpmax=8: ANTES (regra antiga) -> ok (ΔP de operação=4<=8, sem
+// trava). AGORA -> trava (P1=10>8: não abre na partida, mesmo com ΔP de
+// operação dentro do admissível).
+const purgPartidaTrava = computePurg({ pin: 10, pout: 6, flow: 500, fsReq: 1 }, { purg: partidaCatalog });
+const bPartidaTrava = purgPartidaTrava.models[0].bitolas[0];
+dump('purg regra de partida: p1=10,p2=6,dpmax=8 (ΔP operação=4 OK; mas P1=10>8 -> trava)', bPartidaTrava);
+console.assert(bPartidaTrava.acimaOperacao === false, 'purg partida: ΔP de operação (4) não deveria exceder dPMax (8)');
+console.assert(bPartidaTrava.acimaPartida === true, 'purg partida: P1 (10) deveria exceder dPMax (8) -> acimaPartida=true (regra nova)');
+console.assert(bPartidaTrava.trava === true, 'purg partida: trava deveria ser true pela regra nova (P1>dPMax), mesmo com ΔP de operação OK — ANTES desta rodada seria false');
+console.assert(bPartidaTrava.cap === 1000, `purg partida: capacidade continua calculada no ΔP de OPERAÇÃO real (curva constante "1000"), obtido ${bPartidaTrava.cap} — só a trava muda, não a capacidade`);
+
+// p1=6,p2=0,dpmax=8: segue ok — P1=6<=8 (sem trava de partida) e ΔP de
+// operação=6<=8 (sem trava de operação); cap=1000>=flow=500 (sem trava de capacidade).
+const purgPartidaOk = computePurg({ pin: 6, pout: 0, flow: 500, fsReq: 1 }, { purg: partidaCatalog });
+const bPartidaOk = purgPartidaOk.models[0].bitolas[0];
+dump('purg regra de partida: p1=6,p2=0,dpmax=8 (segue ok)', bPartidaOk);
+console.assert(bPartidaOk.acimaOperacao === false, 'purg partida ok: ΔP de operação (6) não deveria exceder dPMax (8)');
+console.assert(bPartidaOk.acimaPartida === false, 'purg partida ok: P1 (6) não deveria exceder dPMax (8)');
+console.assert(bPartidaOk.trava === false, 'purg partida ok: não deveria travar por nenhum dos 3 critérios');
+
+// 24c) mesma regra propagada ao FLASH (P1 do purgador de dreno = Preev, a
+// pressão do tanque flash — ver nota em lib/engine.js#computeFlash): Preev=9
+// > dPMax=8 (trava de partida) mesmo com o ΔP de operação (dPdren=Preev-Pcon=3)
+// dentro do admissível.
+const flashPartida = computeFlash({
+  vCon: 5000, Palim: 10, Preev: 9, Pcon: 6,
+  PCI: 8600, rho: 1, precoRaw: 2.5, precoUn: 'm3', hd: 24, dm: 30, inv: 1000, co2: 2,
+}, { purg: partidaCatalog });
+const flashPartidaBit = flashPartida.purgModels[0].bitolas[0];
+dump('flash regra de partida: Preev=9,Pcon=6,dpmax=8 (ΔP operação=3 OK; mas Preev=9>8 -> trava)', flashPartidaBit);
+console.assert(flashPartida.invalid === false, 'flash partida: não deveria ser inválido (Palim=10>Preev=9)');
+console.assert(flashPartida.dPdren === 3, `flash partida: dPdren deveria ser Preev-Pcon=3, obtido ${flashPartida.dPdren}`);
+console.assert(flashPartidaBit.acimaOperacao === false, 'flash partida: ΔP de operação (3) não deveria exceder dPMax (8)');
+console.assert(flashPartidaBit.acimaPartida === true, 'flash partida: Preev (9) deveria exceder dPMax (8) -> acimaPartida=true (regra nova, propagada do purgador ao flash)');
+console.assert(flashPartidaBit.trava === true, 'flash partida: trava deveria ser true pela regra nova (Preev>dPMax)');
 
 // 25) computeGeracaoSuper — vapor de geração/superaquecido (migrado nesta rodada,
 //     IAPWS-IF97 Região 2). Caso sem superaquecimento (queda de pressão pequena,
